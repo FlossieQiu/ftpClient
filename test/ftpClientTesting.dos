@@ -1,0 +1,813 @@
+login("admin", "123456")
+
+// ====================================================================
+// 1. 环境配置与插件加载
+// ====================================================================
+HOST_URL = "ftp://127.0.0.1:2121/"
+USER_NAME = "test"
+PASSWORD = "test123"
+
+// 请根据实际环境调整路径
+TEST_LOCAL_DIR  = "d:/test_data_local/"
+pluginPath = 'D:/ddb_install/DolphinDB_Win64_V3.00.4.2/server/plugins/ftpClient/PluginFtpClient.txt';
+// Linux 路径示例 (保留供参考)
+// TEST_LOCAL_DIR  = "/root/download/test_data_local/" 
+// pluginPath = '/root/download/ddbv3004/server/plugins/ftpClient/PluginFtpClient.txt';
+
+
+try{loadPlugin(pluginPath)}catch(ex){print ex};
+go
+use ftpClient;
+
+// 清理环境
+try{rmdir(TEST_LOCAL_DIR, true)}catch(ex){};
+mkdir(TEST_LOCAL_DIR);
+
+// 辅助函数
+def createLocalFile(path, content) {
+    f = file(path, "w")
+    f.writeLine(content)
+    f.close()
+}
+
+// 辅助函数：生成大字符串 (用于模拟大文件)
+def createLargeString(sizeMB) {
+    // 生成 1KB 数据
+    base = "0123456789"
+    for(i in 0:100) base = base + "0123456789" // ~1KB
+    
+    // 扩充到 MB
+    res = base
+    for(i in 0:10) res = res + res // 1KB -> 1MB (approx 2^10)
+    
+    // 扩充到指定大小
+    finalRes = res
+    loopCount = int(sizeMB) - 1
+    if (loopCount > 0) {
+        for(i in 0:loopCount) finalRes = finalRes + res
+    }
+    return finalRes
+}
+
+def generateLargeLocalFile(path, sizeMB) {
+    // 1. 先构造一个 1MB 的数据块 (1024 * 1024 bytes)
+    // 使用 repeat 重复字符 'A'，产生 1MB 字符串
+    chunkSize = 1024 * 1024
+    chunk = repeat("A", chunkSize)
+    
+    // 2. 以写入模式打开本地文件
+    f = file(path, "w")
+    
+    // 3. 循环写入，每次写入 1MB
+    // 使用 int() 确保循环次数为整数
+    loopCount = int(sizeMB)
+    if (loopCount > 0) {
+        for(i in 0:loopCount) {
+            f.write(chunk)
+        }
+    }
+    
+    // 4. 处理剩余的 KB (如果有小数部分)
+    remainingMB = sizeMB - loopCount
+    if (remainingMB > 0) {
+        remainingBytes = int(remainingMB * chunkSize)
+        f.write(take(chunk, remainingBytes))
+    }
+    
+    f.close()
+    print("Successfully generated file: " + path + " (Size: " + string(sizeMB) + " MB)")
+}
+
+
+// ====================================================================
+// 2. ftpClient::ftpList 专题测试
+// ====================================================================
+
+// --- url 参数测试 ---
+@testing:case="list_url_int", exception=1
+ftpClient::ftpList(1, USER_NAME, PASSWORD) 
+@testing:case="list_url_float", exception=1
+ftpClient::ftpList(1.1, USER_NAME, PASSWORD)
+@testing:case="list_url_table", exception=1
+ftpClient::ftpList(table(1..3 as id), USER_NAME, PASSWORD)
+@testing:case="list_url_dict", exception=1
+ftpClient::ftpList(dict(1 2, 3 4), USER_NAME, PASSWORD)
+@testing:case="list_url_vector", exception=1
+ftpClient::ftpList([HOST_URL, HOST_URL], USER_NAME, PASSWORD)
+@testing:case="list_url_null", exception=1
+ftpClient::ftpList(string(NULL), USER_NAME, PASSWORD)
+@testing:case="list_url_not_exist", exception=1
+ftpClient::ftpList(HOST_URL + "non_existent_path_666/", USER_NAME, PASSWORD)
+@testing:case="list_url_is_file", exception=1
+ftpClient::ftpUpload(HOST_URL+"is_file.txt", "data", USER_NAME, PASSWORD); ftpClient::ftpList(HOST_URL+"is_file.txt", USER_NAME, PASSWORD)
+
+// --- user 参数 ---
+@testing:case="list_user_int", exception=1
+ftpClient::ftpList(HOST_URL, 1, PASSWORD)
+@testing:case="list_user_float", exception=1
+ftpClient::ftpList(HOST_URL, 1.1, PASSWORD)
+@testing:case="list_user_table", exception=1
+ftpClient::ftpList(HOST_URL, table(1 as a), PASSWORD)
+@testing:case="list_user_dict", exception=1
+ftpClient::ftpList(HOST_URL, dict(1, 2), PASSWORD)
+@testing:case="list_user_vector", exception=1
+ftpClient::ftpList(HOST_URL, [USER_NAME], PASSWORD)
+
+
+// --- password 参数 ---
+@testing:case="list_pass_int", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, 123)
+@testing:case="list_pass_float", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, 123.45)
+@testing:case="list_pass_table", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, table(1 as a))
+@testing:case="list_pass_dict", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, dict(1, 2))
+@testing:case="list_pass_vector", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, [PASSWORD])
+
+
+// --- timeout 参数 (timeout 接受数值标量，故测试非数值及非标量) ---
+@testing:case="list_timeout_string", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, "30")
+@testing:case="list_timeout_table", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, table(1 as a))
+@testing:case="list_timeout_dict", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, dict(1, 2))
+
+@testing:case="list_timeout_negative", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, -5.0)
+@testing:case="list_timeout_vector", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, [10.0, 20.0])
+@testing:case="list_timeout_vector", exception=1
+ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD, [30.0])
+
+// --- 正确性用例 ---
+@testing:case="list_happy_path"
+res = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+assert 1, count(res.colNames()) == 4
+
+// --- 并发测试 ---
+@testing:case="list_concurrency"
+def list_task(url, u, p){ return ftpClient::ftpList(url, u, p).size() }
+jobs = array(ANY, 0)
+for(i in 0:5) jobs.append!(submitJob("list_job_"+i, "", list_task, HOST_URL, USER_NAME, PASSWORD))
+for(j in jobs) assert 1, getJobReturn(j, true) >= 0
+
+// --- keyword测试 ---
+@testing:case="list_args_with_keyword"
+res=ftpClient::ftpList(url=HOST_URL,user= USER_NAME, password=PASSWORD, timeout=10.0)
+assert 1, res.count()>0
+
+@testing:case="list_args_with_keyword_optional1"
+res=ftpClient::ftpList(url=HOST_URL, timeout=10.0)
+assert 1, res.count()>0
+
+@testing:case="list_args_with_keyword_optional2"
+res=ftpClient::ftpList(HOST_URL, timeout=10.0)
+assert 1, res.count()>0
+
+@testing:case="list_args_with_keyword_optional3", exception=1
+res=ftpClient::ftpList(HOST_URL, user= USER_NAME)
+
+@testing:case="list_error_args_name", syntaxError = 1
+res=ftpClient::ftpList(urls=HOST_URL, timeout=10.0)
+
+@testing:case="list_error_args_name2", syntaxError = 1
+res=ftpClient::ftpList(url=HOST_URL, time=10.0)
+
+// ====================================================================
+// 3. ftpClient::ftpUpload 专题测试
+// ====================================================================
+
+// --- [必选参数] url 校验 (INT, FLOAT, TABLE, DICT, VECTOR, NULL, Empty, Protocol) ---
+@testing:case="upload_url_int", exception=1
+ftpClient::ftpUpload(1, "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_float", exception=1
+ftpClient::ftpUpload(1.1, "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_table", exception=1
+ftpClient::ftpUpload(table(1 as a), "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_dict", exception=1
+ftpClient::ftpUpload(dict(1, 2), "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_vector", exception=1
+ftpClient::ftpUpload([HOST_URL+"1.txt"], "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_null", exception=1
+ftpClient::ftpUpload(string(NULL), "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_empty", exception=1
+ftpClient::ftpUpload("", "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_protocol_err", exception=1
+ftpClient::ftpUpload("htp://127.0.0.1/a.txt", "data", USER_NAME, PASSWORD)
+@testing:case="upload_url_not_exist_path", exception=1
+ftpClient::ftpUpload(HOST_URL + "non_existent_subdir/a.txt", "data", USER_NAME, PASSWORD)
+
+
+// --- [必选参数] data 校验 (仅限 String/Blob 标量; 其他需报错) ---
+@testing:case="upload_data_int", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", 123, USER_NAME, PASSWORD)
+@testing:case="upload_data_float", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", 1.23, USER_NAME, PASSWORD)
+@testing:case="upload_data_table", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", table(1..3 as id), USER_NAME, PASSWORD)
+@testing:case="upload_data_dict", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", dict(1, 2), USER_NAME, PASSWORD)
+@testing:case="upload_data_null", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", string(NULL), USER_NAME, PASSWORD)
+@testing:case="upload_data_vector", exception=1
+ftpClient::ftpUpload(HOST_URL+"1.txt", [1, 2])
+
+@testing:case="upload_data_char", exception=1
+ftpClient::ftpUpload(HOST_URL+"1.txt", '1')
+@testing:case="upload_data_char_vector", exception=1
+ftpClient::ftpUpload(HOST_URL+"1.txt", ['1','a'])
+
+
+// --- [可选参数] user/password/timeout (INT, FLOAT, TABLE, DICT, VECTOR) ---
+@testing:case="upload_user_float", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", "d", 1.1, PASSWORD)
+@testing:case="upload_pass_table", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", "d", USER_NAME, table(1 as a))
+@testing:case="upload_timeout_vector", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", "d", USER_NAME, PASSWORD, [10.0])
+@testing:case="upload_timeout_negative", exception=1
+ftpClient::ftpUpload(HOST_URL+"a.txt", "d", USER_NAME, PASSWORD, -1.0)
+ 
+
+
+// --- 正确性与特殊逻辑 ---
+@testing:case="upload_happy_chinese"
+ftpClient::ftpUpload(HOST_URL+"中文.txt", "包含中文的内容数据", USER_NAME, PASSWORD)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "中文.txt"
+assert 1, 1==count(targetFile)
+assert 2, targetFile.size[0] > 20 
+
+
+@testing:case="upload_happy_blob"
+ftpClient::ftpUpload(HOST_URL+"blob.bin", blob("binary_data"), USER_NAME, PASSWORD)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "blob.bin"
+assert 1, 1==count(targetFile)
+assert 2, targetFile.size[0] > 10 
+
+@testing:case="upload_happy_max_string"
+ftpClient::ftpUpload(HOST_URL+"max_str.txt", repeat("A", 1024*1024*5), USER_NAME, PASSWORD) // 5MB
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "max_str.txt"
+assert 1, 1==count(targetFile)
+assert 2, targetFile.size[0] >= 5242880
+
+@testing:case="upload_content_valid"
+s="English中文数字123，,;*#@混合内容"
+ftpClient::ftpUpload(HOST_URL+"up_ok.txt", s, USER_NAME, PASSWORD) 
+s1 = ftpClient::ftpGet(HOST_URL+"up_ok.txt", USER_NAME, PASSWORD)
+assert 1, s==s1
+
+@testing:case="upload_data_string_vector"
+s2=["abc", "def"]
+ftpClient::ftpUpload(HOST_URL+"string_vector.txt",s2 , USER_NAME, PASSWORD) // 允许字符串向量(非标量)
+s3 = ftpClient::ftpGet(HOST_URL+"string_vector.txt", USER_NAME, PASSWORD)
+assert 1, strpos(s3,s2[0]) != -1
+
+// --- Keyword测试 ---
+@testing:case="upload_with_keyword"
+ftpClient::ftpUpload(url=HOST_URL+"kw.txt", data="kw_data", user=USER_NAME, password=PASSWORD, timeout=20.0)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upload_kw_mixed_order"
+// 乱序具名调用
+ftpClient::ftpUpload(data="mixed_order", timeout=15.0, url=HOST_URL+"kw_mixed.txt", password=PASSWORD, user=USER_NAME)
+assert 1, ftpClient::ftpGet(HOST_URL+"kw_mixed.txt", USER_NAME, PASSWORD) == "mixed_order"
+
+@testing:case="upload_kw_partial_pos"
+// 前两个位置参数 + 后三个具名参数
+ftpClient::ftpUpload(HOST_URL+"kw_partial.txt", "partial_data", timeout=5.0, user=USER_NAME, password=PASSWORD)
+assert 1, ftpClient::ftpGet(HOST_URL+"kw_partial.txt", USER_NAME, PASSWORD) == "partial_data"
+
+
+@testing:case="upload_with_keyword_optional1"
+ftpClient::ftpUpload(url=HOST_URL+"kw1.txt", data="kw_data")
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw1.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upload_with_keyword_optional2"
+ftpClient::ftpUpload(url=HOST_URL+"kw2.txt", data="kw_data",timeout=20.0)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw2.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upload_with_keyword_optional3", exception=1
+ftpClient::ftpUpload(url=HOST_URL+"kw3.txt", data="kw_data",user= USER_NAME)
+
+@testing:case="upload_error_args_name", syntaxError = 1
+ftpClient::ftpUpload(remoteurl=HOST_URL+"kw2.txt", data="kw_data",timeout=20.0)
+
+@testing:case="upload_error_args_name2", syntaxError = 1
+ftpClient::ftpUpload(url=HOST_URL+"kw2.txt", data="kw_data",time=20.0)
+
+// 覆盖上传 (Overwrite) 测试
+// 验证再次上传同名文件，内容是否更新
+@testing:case="test_01_overwrite"
+overwriteUrl = HOST_URL + "overwrite_test.txt"
+// 第一次上传短内容
+ftpClient::ftpUpload(overwriteUrl, "short", USER_NAME, PASSWORD)
+t1 = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="overwrite_test.txt"
+assert 1, t1.size[0] == 5
+// 第二次上传长内容
+ftpClient::ftpUpload(overwriteUrl, "longer_content_string", USER_NAME, PASSWORD)
+t2 = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="overwrite_test.txt"
+assert 2, t2.size[0] > 5
+
+// 大文件稳定性测试 (5MB)
+@testing:case="test_02_large_file"
+largeUrl = HOST_URL + "large_5mb.txt"
+// 构造约 2MB+ 的数据进行测试 (考虑到内存限制，不宜过大，但要足以触发分块传输)
+largeData = createLargeString(5) 
+ftpClient::ftpUpload(largeUrl, largeData, USER_NAME, PASSWORD)
+res = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="large_5mb.txt"
+// 验证服务器端文件大小不为0且接近发送大小
+assert 1, res.size[0] > 1000000 
+// --- 并发测试 ---
+@testing:case="upload_concurrency"
+def upload_task(id,HOST_URL){ ftpClient::ftpUpload(HOST_URL+"concurrent_"+string(id)+".txt", "data", "test", "test123"); return true }
+jobs = array(ANY, 0); for(i in 0:10) jobs.append!(submitJob("up_job_"+i, "", upload_task, i,HOST_URL))
+for(j in jobs) assert 1, getJobReturn(j, true) == true
+assert 2, getRecentJobs(10).errorMsg.isNull()==true
+
+// ====================================================================
+// 4. ftpClient::ftpUploadFile 专题测试
+// ====================================================================
+
+// --- [必选参数] url / localFile 校验 (INT, FLOAT, TABLE, DICT, VECTOR, NULL) ---
+@testing:case="uploadFile_url_int", exception=1
+ftpClient::ftpUploadFile(1, TEST_LOCAL_DIR+"f.txt")
+@testing:case="uploadFile_url_vector", exception=1
+ftpClient::ftpUploadFile([HOST_URL], TEST_LOCAL_DIR+"f.txt")
+@testing:case="uploadFile_url_null", exception=1
+ftpClient::ftpUploadFile(string(NULL), TEST_LOCAL_DIR+"f.txt")
+
+@testing:case="uploadFile_local_float", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", 1.1)
+@testing:case="uploadFile_local_table", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", table(1 as a))
+@testing:case="uploadFile_local_null", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", string(NULL))
+
+// --- [可选参数] user 全量校验 ---
+@testing:case="upf_user_int", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", 1)
+@testing:case="upf_user_float", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", 1.1)
+@testing:case="upf_user_table", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", table(1 as a))
+@testing:case="upf_user_dict", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", dict(1, 2))
+@testing:case="upf_user_vector", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", [USER_NAME])
+
+// --- [可选参数] password 全量校验 ---
+@testing:case="upf_pass_int", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, 123)
+@testing:case="upf_pass_table", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, table(1 as a))
+@testing:case="upf_pass_vector", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, [PASSWORD])
+
+// --- [可选参数] timeout 全量校验 ---
+@testing:case="upf_timeout_string", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, PASSWORD, "30")
+@testing:case="upf_timeout_vector", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, PASSWORD, [10.0])
+@testing:case="upf_timeout_negative", exception=1
+ftpClient::ftpUploadFile(HOST_URL+"f.txt", TEST_LOCAL_DIR+"f.txt", USER_NAME, PASSWORD, -5.0)
+
+// --- [Keyword 测试] ftpUploadFile ---
+@testing:case="upFile_kw_all"
+createLocalFile(TEST_LOCAL_DIR+"kw_test.txt", "file_data")
+ftpClient::ftpUploadFile(url=HOST_URL+"kw_file.txt", localFile=TEST_LOCAL_DIR+"kw_test.txt", user=USER_NAME, password=PASSWORD, timeout=20.0)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw_file.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upFile_kw_mixed"
+// 乱序调用
+ftpClient::ftpUploadFile(timeout=10.0, localFile=TEST_LOCAL_DIR+"kw_test.txt", url=HOST_URL+"kw_file_mixed.txt")
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw_file_mixed.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upFile_kw_pos_mixed"
+// 位置参数 url + 具名参数 localFilePath
+ftpClient::ftpUploadFile(HOST_URL+"kw_pos.txt", localFile=TEST_LOCAL_DIR+"kw_test.txt", timeout=10.0)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "kw_pos.txt"
+assert 1, 1==count(targetFile)
+
+@testing:case="upFile_kw_error_name", syntaxError = 1
+// 拼写错误 (localPath)
+ftpClient::ftpUploadFile(url=HOST_URL+"err.txt", localPath=TEST_LOCAL_DIR+"kw_test.txt")
+
+@testing:case="upFile_kw_error_name2", syntaxError = 1
+// 拼写错误 (time)
+ftpClient::ftpUploadFile(url=HOST_URL+"err.txt", localFile=TEST_LOCAL_DIR+"kw_test.txt", time=5.0)
+
+@testing:case="upFile_kw_missing_mandatory", exception=1
+// 漏掉必选参数 (localFile)
+ftpClient::ftpUploadFile(url=HOST_URL+"err.txt", user=USER_NAME)
+
+@testing:case="uploadFile_logic_file_not_exist", exception=1
+ftpClient::ftpUploadFile(HOST_URL + "ghost.txt", TEST_LOCAL_DIR + "non_existent_file_123.txt", USER_NAME, PASSWORD)
+
+@testing:case="upf_empty_file_happy"
+emptyFile = TEST_LOCAL_DIR + "empty.txt"; createLocalFile(emptyFile, "")
+ftpClient::ftpUploadFile(HOST_URL+"empty.txt", emptyFile, USER_NAME, PASSWORD)
+assert 1, (select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="empty.txt").size[0] <= 2
+
+@testing:case="upf_different_filename_happy"
+f1 = TEST_LOCAL_DIR + "local_name.txt"; createLocalFile(f1, "test")
+ftpClient::ftpUploadFile(HOST_URL+"remote_name.txt", f1, USER_NAME, PASSWORD)
+assert 1, "remote_name.txt" in exec filename from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+
+
+
+// --- 正确性与并发 ---
+@testing:case="upf_happy_chinese"
+createLocalFile(TEST_LOCAL_DIR+"本地.txt", "中文内容")
+ftpClient::ftpUploadFile(url=HOST_URL+"远程.txt", localFile=TEST_LOCAL_DIR+"本地.txt", timeout=10.0)
+fileList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+targetFile = select * from fileList where filename = "远程.txt"
+assert 1, 1==count(targetFile)
+
+// 覆盖上传 (Overwrite) 测试
+// 验证再次上传同名文件，内容是否更新
+@testing:case="upf_overwrite"
+createLocalFile(TEST_LOCAL_DIR+"short.txt", "short")
+ftpClient::ftpUploadFile(url=HOST_URL+"overwrite_test.txt", localFile=TEST_LOCAL_DIR+"short.txt", timeout=10.0)
+// 第一次上传短内容
+t1 = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="overwrite_test.txt"
+assert 1, t1.size[0] <= 5+2
+// 第二次上传长内容
+createLocalFile(TEST_LOCAL_DIR+"long.txt", "longer_content_string")
+ftpClient::ftpUploadFile(url=HOST_URL+"overwrite_test.txt", localFile=TEST_LOCAL_DIR+"long.txt", timeout=10.0)
+t2 = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="overwrite_test.txt"
+assert 2, t2.size[0] > 7
+
+// 大文件稳定性测试 
+@testing:case="upf_large_file"
+BIG_FILE = TEST_LOCAL_DIR + "big_file_1500mb.dat"
+largeUrl = HOST_URL + "big_file_1500mb.dat"
+generateLargeLocalFile(BIG_FILE, 1500)
+ftpClient::ftpUploadFile(largeUrl, BIG_FILE, USER_NAME, PASSWORD)
+res = select size from ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD) where filename="big_file_1500mb.dat"
+// 验证服务器端文件大小不为0且接近发送大小
+assert 1, res.size[0] > 1024*1024*1500 
+
+
+// 智能编码测试
+@testing:case="upf_smart_encode"
+localFilePathCn = TEST_LOCAL_DIR + "自然语言 文件.txt"
+createLocalFile(localFilePathCn, "Content with spaces and chinese")
+targetUrlCn = HOST_URL + "自然语言 文件.txt" 
+ftpClient::ftpUploadFile(targetUrlCn, localFilePathCn, USER_NAME, PASSWORD)
+checkList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+hasFile = exec count(*) from checkList where filename like "%自然语言 文件.txt%"
+assert 1, hasFile >= 1
+
+@testing:case="upf_boundary_2GB_less"
+// 测试 2000MB (略小于 2GB)，预期应成功
+BIG_FILE_OK = TEST_LOCAL_DIR + "big_2000.dat"
+generateLargeLocalFile(BIG_FILE_OK, 2000)
+ftpClient::ftpUploadFile(HOST_URL+"big_2000.dat", BIG_FILE_OK, USER_NAME, PASSWORD)
+
+@testing:case="upf_boundary_2GB_more", exception=1
+// 测试 2100MB (略大于 2GB)，如果插件不支持大文件，此处应报错
+// 你已经发现它报错了，这可以作为一个“已知限制”的异常用例
+ftpClient::ftpUploadFile(HOST_URL+"big_2100.dat", TEST_LOCAL_DIR+"big.dat", USER_NAME, PASSWORD)
+
+@testing:case="upf_local_no_permission", exception=1
+def testNoPermission(TEST_LOCAL_DIR,HOST_URL,USER_NAME, PASSWORD){
+    localP = TEST_LOCAL_DIR + "no_read.txt"
+    createLocalFile(localP, "top secret")
+    
+    if (getOS()!="windows") {
+        shell("chmod 000 " + localP) // Linux 环境
+    } else {
+        // Windows 环境：尝试打开文件并保持锁定，模拟不可读
+        // 或者指定一个系统级锁定文件
+        localP = "C:/Windows/System32/config/SAM" 
+    }
+    
+    try {
+        ftpClient::ftpUploadFile(HOST_URL+"no_read.txt", localP, USER_NAME, PASSWORD)
+    } catch(ex) { throw ex }
+}
+testNoPermission(TEST_LOCAL_DIR,HOST_URL,USER_NAME, PASSWORD)
+
+@testing:case="upf_concurrency"
+def upf_task(id, HOST_URL, local){ ftpClient::ftpUploadFile(HOST_URL+"f_"+string(id)+".txt", local, "test", "test123"); return true }
+jobs = array(ANY, 0); for(i in 0:5) jobs.append!(submitJob("upf_job_"+i, "", upf_task, i, HOST_URL, TEST_LOCAL_DIR+"本地.txt"))
+for(j in jobs) assert 1, getJobReturn(j, true) == true
+
+// ====================================================================
+// 5. ftpClient::ftpDownloadDir 专题测试
+// ====================================================================
+
+// --- [必选参数] remoteUrl 校验 (INT, FLOAT, TABLE, DICT, VECTOR, NULL, Empty) ---
+@testing:case="downDir_rem_int", exception=1
+ftpClient::ftpDownloadDir(1, TEST_LOCAL_DIR)
+@testing:case="downDir_rem_table", exception=1
+ftpClient::ftpDownloadDir(table(1 as a), TEST_LOCAL_DIR)
+@testing:case="downDir_rem_null", exception=1
+ftpClient::ftpDownloadDir(string(NULL), TEST_LOCAL_DIR)
+@testing:case="downDir_rem_empty", exception=1
+ftpClient::ftpDownloadDir("", TEST_LOCAL_DIR)
+
+// --- [必选参数] localDir 校验 ---
+@testing:case="downDir_loc_float", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, 1.1)
+@testing:case="downDir_loc_vector", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, [TEST_LOCAL_DIR])
+@testing:case="downDir_loc_null", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, string(NULL))
+@testing:case="downDir_loc_not_exist", exception=1
+// localDir 逻辑：如果路径不存在且父目录也不存在（如 Z:/non_existent），应报错
+ftpClient::ftpDownloadDir(HOST_URL, "Z:/error_path_666/")
+
+// --- [可选参数] user 参数全量校验 ---
+@testing:case="downDir_user_int", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, 1, PASSWORD)
+@testing:case="downDir_user_float", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, 1.1, PASSWORD)
+@testing:case="downDir_user_table", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, table(1 as a), PASSWORD)
+@testing:case="downDir_user_dict", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, dict(1, 2), PASSWORD)
+@testing:case="downDir_user_vector", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, [USER_NAME], PASSWORD)
+
+// --- [可选参数] password 参数全量校验 ---
+@testing:case="downDir_pass_int", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, 123)
+@testing:case="downDir_pass_float", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, 1.23)
+@testing:case="downDir_pass_table", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, table(1 as a))
+@testing:case="downDir_pass_dict", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, dict(1, 2))
+@testing:case="downDir_pass_vector", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, [PASSWORD])
+
+// --- [可选参数] timeout 参数全量校验 ---
+@testing:case="downDir_timeout_string", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, "30")
+@testing:case="downDir_timeout_table", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, table(1 as a))
+@testing:case="downDir_timeout_dict", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, dict(1, 2))
+@testing:case="downDir_timeout_vector", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, [10.0])
+@testing:case="downDir_timeout_negative", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, -1.0)
+
+// --- [Keyword 关键字测试] ---
+@testing:case="downDir_kw_all"
+cnt=ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_all/", user=USER_NAME, password=PASSWORD, timeout=10.0)
+assert 1, cnt >= 0
+
+@testing:case="downDir_kw_all2"
+// 全关键字及乱序
+cnt = ftpClient::ftpDownloadDir(localDir=TEST_LOCAL_DIR+"kw_down/", timeout=30.0, url=HOST_URL, user=USER_NAME, password=PASSWORD)
+assert 1, cnt >= 0
+
+@testing:case="downDir_kw_optional1"
+cnt = ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_opt1/", timeout=60.0)
+assert 1, cnt >= 0
+
+@testing:case="downDir_kw_optional2"
+cnt = ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_opt2/")
+assert 1, cnt >= 0
+
+@testing:case="downDir_kw_optional3", exception=1
+// 漏掉必选参数 localDir
+ftpClient::ftpDownloadDir(url=HOST_URL, user=USER_NAME)
+
+@testing:case="downDir_error_args_name", syntaxError = 1
+// 拼写错误 url -> url1
+ftpClient::ftpDownloadDir(url1=HOST_URL, localDir=TEST_LOCAL_DIR)
+
+@testing:case="downDir_error_args_name2", syntaxError = 1
+// 拼写错误 localDir -> localPath
+ftpClient::ftpDownloadDir(url=HOST_URL, localPath=TEST_LOCAL_DIR)
+
+@testing:case="downDir_loc_is_file", exception=1
+existingFile = TEST_LOCAL_DIR + "not_a_dir.txt"
+createLocalFile(existingFile, "temp")
+ftpClient::ftpDownloadDir(HOST_URL, existingFile, USER_NAME, PASSWORD)
+
+@testing:case="downDir_loc_not_exist", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR + "not_exist_sub/not_exist_real/")
+
+// --- 正确性逻辑：断点续传/斜杠兼容/空目录 ---
+
+@testing:case="downDir_logic_resume"
+// 场景：本地文件大小 > 远程文件大小
+remUrl = HOST_URL + "resume.txt"; ftpClient::ftpUpload(remUrl, "123", USER_NAME, PASSWORD) // 远程 3 字节
+locRes = TEST_LOCAL_DIR + "resume.txt"; createLocalFile(locRes, "1234567890") // 本地 10 字节
+ftpClient::ftpDownloadDir(remUrl, TEST_LOCAL_DIR, USER_NAME, PASSWORD)
+filesize=exec fileSize from  files(TEST_LOCAL_DIR) where filename="resume.txt"
+assert 1, filesize== 3 // 必须覆盖下载为 3 字节
+
+@testing:case="downDir_logic_trailing_slash"
+// 测试末尾不带斜杠是否能正确处理目录
+localSlash = TEST_LOCAL_DIR + "slash_test/"; try{rmdir(localSlash, true)}catch(ex){};  mkdir(localSlash)
+cnt=ftpClient::ftpDownloadDir(HOST_URL, localSlash, USER_NAME, PASSWORD)
+assert 1 ,cnt > 0
+assert 2 , files(localSlash).count()>0
+try{rmdir(localSlash, true)}catch(ex){};  mkdir(localSlash)
+cnt=ftpClient::ftpDownloadDir(HOST_URL+ "/", TEST_LOCAL_DIR + "slash_test", USER_NAME, PASSWORD)
+assert 3 ,cnt > 0
+assert 4 , files(localSlash).count()>0
+
+@testing:case="downDir_empty_remote_happy"
+// 假设远程有名为 empty_dir 的目录
+ftpClient::ftpDownloadDir(HOST_URL+"empty_dir/", TEST_LOCAL_DIR+"empty_local/", USER_NAME, PASSWORD)
+
+@testing:case="downDir_local_not_exist_logic", exception=1
+ftpClient::ftpDownloadDir(HOST_URL, "/path/never/existed/on/this/system/", USER_NAME, PASSWORD)
+
+// --- 并发测试 ---
+@testing:case="downDir_concurrency"
+def down_task(remote, local, USER_NAME, PASSWORD){ return ftpClient::ftpDownloadDir(remote, local, USER_NAME, PASSWORD,60) }
+jobs = array(ANY, 0); for(i in 0:5) jobs.append!(submitJob("down_job_"+i, "", down_task, HOST_URL, TEST_LOCAL_DIR+"concurrent/",USER_NAME, PASSWORD))
+for(j in jobs) assert 1, getJobReturn(j, true) >= 0
+// ====================================================================
+// 6. ftpClient::ftpGet 专题测试
+// ====================================================================
+// --- [必选参数] url 校验 (INT, FLOAT, TABLE, DICT, VECTOR, NULL) ---
+@testing:case="get_url_int", exception=1
+ftpClient::ftpGet(888)
+@testing:case="get_url_float", exception=1
+ftpClient::ftpGet(888.0)
+@testing:case="get_url_vector", exception=1
+ftpClient::ftpGet([HOST_URL+"1.txt"])
+@testing:case="get_url_table", exception=1
+ftpClient::ftpGet(table(HOST_URL as url))
+@testing:case="get_url_null", exception=1
+ftpClient::ftpGet(string(NULL))
+
+// --- [可选参数] user 参数全量校验 ---
+@testing:case="get_user_int", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", 1)
+@testing:case="get_user_float", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", 1.1)
+@testing:case="get_user_table", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", table(1 as a))
+@testing:case="get_user_dict", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", dict(1, 2))
+@testing:case="get_user_vector", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", [USER_NAME])
+
+// --- [可选参数] password 参数全量校验 ---
+@testing:case="get_pass_int", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, 123)
+@testing:case="get_pass_float", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, 1.23)
+@testing:case="get_pass_table", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, table(1 as a))
+@testing:case="get_pass_dict", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, dict(1, 2))
+@testing:case="get_pass_vector", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, [PASSWORD])
+
+// --- [可选参数] timeout 参数全量校验 ---
+@testing:case="get_timeout_string", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, PASSWORD, "30")
+@testing:case="get_timeout_table", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, PASSWORD, table(1 as a))
+@testing:case="get_timeout_dict", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, PASSWORD, dict(1, 2))
+@testing:case="get_timeout_vector", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, PASSWORD, [10.0])
+@testing:case="get_timeout_negative", exception=1
+ftpClient::ftpGet(HOST_URL+"1.txt", USER_NAME, PASSWORD, -5.0)
+
+// --- [Keyword 关键字测试] ---
+
+
+
+// --- [Keyword 正常调用] ---
+@testing:case="get_args_with_keyword_all"
+// 全具名参数调用
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+res = ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", user=USER_NAME, password=PASSWORD, timeout=10.0)
+assert 1, strlen(res) > 0
+
+
+@testing:case="get_args_with_keyword_reorder"
+// 具名参数乱序调用
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+res = ftpClient::ftpGet(timeout=15.0, password=PASSWORD, url=HOST_URL + "get_kw_test.txt", user=USER_NAME)
+assert 1, strlen(res) > 0
+
+@testing:case="get_args_with_keyword_mandatory_only"
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+// 具名调用：仅传必选参数 url
+res = ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt")
+assert 1, strlen(res) > 0
+
+@testing:case="get_args_with_keyword_optional1"
+// 具名调用：url + timeout (跳过 user/password)
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+res = ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", timeout=20.0)
+assert 1, strlen(res) > 0
+
+@testing:case="get_args_with_keyword_optional2", exception=1
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+// 具名调用：url + user (跳过 password/timeout)
+res = ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", user=USER_NAME)
+
+
+@testing:case="get_args_mixed_pos_kw"
+// 位置参数 (url) + 具名参数 (timeout)
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+res = ftpClient::ftpGet(HOST_URL + "get_kw_test.txt", timeout=5.0)
+assert 1, strlen(res) > 0
+
+@testing:case="get_all_optional_missing_happy"
+// 仅传必选 url，不传任何可选参数
+// 准备测试数据
+ftpClient::ftpUpload(HOST_URL + "get_kw_test.txt", "DolphinDB FTP Keyword Test Content", USER_NAME, PASSWORD)
+res = ftpClient::ftpGet(HOST_URL+"get_kw_test.txt")
+assert 1, strlen(res) > 0
+
+// --- [Keyword 异常校验] ---
+@testing:case="get_kw_missing_mandatory", exception=1
+// 具名调用但漏掉了必选参数 url
+ftpClient::ftpGet(user=USER_NAME, password=PASSWORD, timeout=10.0)
+
+@testing:case="get_error_args_name1", syntaxError = 1
+// 关键字名称拼写错误 (uri -> url)
+ftpClient::ftpGet(uri=HOST_URL + "get_kw_test.txt", timeout=10.0)
+
+@testing:case="get_error_args_name2", syntaxError = 1
+// 关键字名称拼写错误 (usr -> user)
+ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", usr=USER_NAME)
+
+@testing:case="get_error_args_name3", syntaxError = 1
+// 关键字名称拼写错误 (time -> timeout)
+ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", time=10.0)
+
+@testing:case="get_args_unsupported_keyword", syntaxError = 1
+// 传入了插件完全不支持的关键字 (如 binary)
+ftpClient::ftpGet(url=HOST_URL + "get_kw_test.txt", binary=true)
+
+
+
+
+
+
+
+// --- 正确性与特殊逻辑 ---
+@testing:case="get_happy_chinese"
+ftpClient::ftpUpload(HOST_URL+"中文获取.txt", "内容: 中国", USER_NAME, PASSWORD)
+assert 1, ftpClient::ftpGet(HOST_URL+"中文获取.txt", USER_NAME, PASSWORD) == "内容: 中国"
+
+@testing:case="get_mixed_content"
+ftpClient::ftpUpload(HOST_URL+"get_en_cn.txt", "中文内容123English", USER_NAME, PASSWORD)
+assert 1, ftpClient::ftpGet(HOST_URL+"get_en_cn.txt", USER_NAME, PASSWORD) == "中文内容123English"
+
+@testing:case="get_err_oversize"
+// 64MB string
+BIG_FILE = TEST_LOCAL_DIR + "big_file_64mb.dat"
+largeUrl = HOST_URL + "big_file_64mb.dat"
+generateLargeLocalFile(BIG_FILE, 64)
+ftpClient::ftpUploadFile(largeUrl, BIG_FILE, USER_NAME, PASSWORD)
+s=ftpClient::ftpGet(largeUrl, USER_NAME, PASSWORD)
+assert 1, s.strlen() >= 64*1024*1024
+
+
+
+// --- 并发测试 ---
+@testing:case="get_concurrency"
+ftpClient::ftpUpload(HOST_URL+"get_en_cn.txt", "中文内容123English", USER_NAME, PASSWORD)
+def get_task(url, USER_NAME, PASSWORD){ return strlen(ftpClient::ftpGet(url, USER_NAME, PASSWORD)) }
+jobs = array(ANY, 0); for(i in 0:5) jobs.append!(submitJob("get_job_"+i, "", get_task, HOST_URL+"get_en_cn.txt", USER_NAME, PASSWORD))
+for(j in jobs) assert 1, getJobReturn(j, true) > 0
+
+
+
+print("================ ALL FTP CLIENT FUNCTIONS REFINED TESTS COMPLETED ================")
+
+
+
+
+
+
