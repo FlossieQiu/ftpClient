@@ -28,7 +28,7 @@ listRemotePlugins()
 ```
 installPlugin("ftpClient")
 ```
-3. 使用 `loadPlugin` 加载插件。在使用前，请确保插件描述文件（`PluginFtpClient.txt`）及对应的二进制文件（`.dll` 或 `.so`）已放置在服务器插件目录中。
+3. 使用 `loadPlugin` 加载插件。
 ```
 loadPlugin("ftpClient")
 ```
@@ -213,6 +213,7 @@ print(content)
 ### Q5: 我传入的 URL 包含空格或中文，需要自己手动进行 URL Encode 吗？
 
 **A**: 不需要。插件的所有接口（`ftpList`, `ftpUpload`, `ftpUploadFile`, `ftpDownloadDir`）均内置了智能 URL 编码器。它会自动识别路径部分并进行转义，同时保留协议头（ftp://）不变。例如，您可以直接写 "ftp://127.0.0.1/我的 数据/"，插件会自动将其转换为 "ftp://127.0.0.1/%E6%88%91%E7%9A%84%20%E6%95%B0%E6%8D%AE/" 发送给服务器。
+
 
 
 
