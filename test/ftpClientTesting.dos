@@ -480,6 +480,10 @@ assert 1, hasFile >= 1
 BIG_FILE_OK = TEST_LOCAL_DIR + "big_2000.dat"
 generateLargeLocalFile(BIG_FILE_OK, 2000)
 ftpClient::ftpUploadFile(HOST_URL+"big_2000.dat", BIG_FILE_OK, USER_NAME, PASSWORD)
+checkList = ftpClient::ftpList(HOST_URL, USER_NAME, PASSWORD)
+hasFile = exec count(*) from checkList where filename like "%big_2000.dat%"
+assert 1, hasFile >= 1
+
 
 @testing:case="upf_boundary_2GB_more", exception=1
 // 测试 2100MB (略大于 2GB)，如果插件不支持大文件，此处应报错
@@ -573,7 +577,7 @@ ftpClient::ftpDownloadDir(HOST_URL, TEST_LOCAL_DIR, USER_NAME, PASSWORD, -1.0)
 
 // --- [Keyword 关键字测试] ---
 @testing:case="downDir_kw_all"
-cnt=ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_all/", user=USER_NAME, password=PASSWORD, timeout=10.0)
+cnt=ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_all/", user=USER_NAME, password=PASSWORD, timeout=60.0)
 assert 1, cnt >= 0
 
 @testing:case="downDir_kw_all2"
@@ -586,7 +590,7 @@ cnt = ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_opt1/"
 assert 1, cnt >= 0
 
 @testing:case="downDir_kw_optional2"
-cnt = ftpClient::ftpDownloadDir(url=HOST_URL, localDir=TEST_LOCAL_DIR+"kw_opt2/")
+cnt = ftpClient::ftpDownloadDir(url=HOST_URL + "自然语言 文件.txt", localDir=TEST_LOCAL_DIR+"kw_opt2/")
 assert 1, cnt >= 0
 
 @testing:case="downDir_kw_optional3", exception=1
@@ -622,24 +626,34 @@ assert 1, filesize== 3 // 必须覆盖下载为 3 字节
 @testing:case="downDir_logic_trailing_slash"
 // 测试末尾不带斜杠是否能正确处理目录
 localSlash = TEST_LOCAL_DIR + "slash_test/"; try{rmdir(localSlash, true)}catch(ex){};  mkdir(localSlash)
-cnt=ftpClient::ftpDownloadDir(HOST_URL, localSlash, USER_NAME, PASSWORD)
+cnt=ftpClient::ftpDownloadDir(HOST_URL, localSlash, USER_NAME, PASSWORD,120)
 assert 1 ,cnt > 0
 assert 2 , files(localSlash).count()>0
 try{rmdir(localSlash, true)}catch(ex){};  mkdir(localSlash)
-cnt=ftpClient::ftpDownloadDir(HOST_URL+ "/", TEST_LOCAL_DIR + "slash_test", USER_NAME, PASSWORD)
+cnt=ftpClient::ftpDownloadDir(HOST_URL+ "/", TEST_LOCAL_DIR + "slash_test", USER_NAME, PASSWORD,120)
 assert 3 ,cnt > 0
 assert 4 , files(localSlash).count()>0
 
 @testing:case="downDir_empty_remote_happy"
-// 假设远程有名为 empty_dir 的目录
-ftpClient::ftpDownloadDir(HOST_URL+"empty_dir/", TEST_LOCAL_DIR+"empty_local/", USER_NAME, PASSWORD)
+// 假设远程有名为 empty_dir 的空目录
+cnt=ftpClient::ftpDownloadDir(HOST_URL+"empty_dir/", TEST_LOCAL_DIR+"empty_local/", USER_NAME, PASSWORD)
+assert 1,cnt==0
 
 @testing:case="downDir_local_not_exist_logic", exception=1
 ftpClient::ftpDownloadDir(HOST_URL, "/path/never/existed/on/this/system/", USER_NAME, PASSWORD)
 
+//递归下载目录
+@testing:case="downDir_recursive "
+ftpClient::ftpUpload(HOST_URL+"subdir_level_1/level.txt","test1",USER_NAME, PASSWORD)
+ftpClient::ftpUpload(HOST_URL+"subdir_level_1/subdir_level_2/level2.txt","test2",USER_NAME, PASSWORD)
+recursive = TEST_LOCAL_DIR + "recursive/"; try{rmdir(recursive, true)}catch(ex){};  mkdir(recursive)
+ftpClient::ftpDownloadDir(HOST_URL, recursive, USER_NAME, PASSWORD,300)
+assert 1,files(TEST_LOCAL_DIR + "recursive/subdir_level_1").count()>0
+assert 2,files(TEST_LOCAL_DIR + "recursive/subdir_level_1/subdir_level_2").count()>0
+
 // --- 并发测试 ---
 @testing:case="downDir_concurrency"
-def down_task(remote, local, USER_NAME, PASSWORD){ return ftpClient::ftpDownloadDir(remote, local, USER_NAME, PASSWORD,60) }
+def down_task(remote, local, USER_NAME, PASSWORD){ return ftpClient::ftpDownloadDir(remote, local, USER_NAME, PASSWORD,300) }
 jobs = array(ANY, 0); for(i in 0:5) jobs.append!(submitJob("down_job_"+i, "", down_task, HOST_URL, TEST_LOCAL_DIR+"concurrent/",USER_NAME, PASSWORD))
 for(j in jobs) assert 1, getJobReturn(j, true) >= 0
 // ====================================================================

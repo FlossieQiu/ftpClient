@@ -20,7 +20,14 @@ def start_ftp_server():
     empty_dir = os.path.join(test_root, "empty_dir")  # 构建子目录路径
     if not os.path.exists(empty_dir):
         os.makedirs(empty_dir)
-
+    # 创建子目录
+    subdir_level_1 = os.path.join(test_root, "subdir_level_1")  # 构建子目录路径
+    if not os.path.exists(subdir_level_1):
+        os.makedirs(subdir_level_1)
+    subdir_level_2 = os.path.join(subdir_level_1, "subdir_level_2")  # 构建子目录路径
+    if not os.path.exists(subdir_level_2):
+        os.makedirs(subdir_level_2)
+    
     # 2. 配置权限
     authorizer = DummyAuthorizer()
     # user=test, password=test123, perm=elradfmwMT (读写删全权限)
